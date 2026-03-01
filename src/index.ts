@@ -91,18 +91,15 @@ ${context || 'None'}
   }
 })
 
-// Nodemailer transporter (Office 365)
+// Nodemailer transporter (Gmail)
 const transporter = nodemailer.createTransport({
-  host: 'smtp.office365.com',
-  port: 587,
-  secure: false,
+  service: 'gmail',
+  host: 'smtp.gmail.com',
+  port: 465,
+  secure: true,
   auth: {
-    user: process.env.SMTP_USER || 'elijah@coresight.com',
+    user: process.env.SMTP_USER || 'elijahandrew1610@gmail.com',
     pass: process.env.SMTP_PASS || '',
-  },
-  tls: {
-    ciphers: 'SSLv3',
-    rejectUnauthorized: false,
   },
 });
 
@@ -117,7 +114,7 @@ app.post('/api/send-email', async (c) => {
     }
 
     const info = await transporter.sendMail({
-      from: process.env.SMTP_USER || 'elijah@coresight.com',
+      from: process.env.SMTP_USER || 'elijahandrew1610@gmail.com',
       to,
       subject,
       text,

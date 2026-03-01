@@ -245,11 +245,11 @@ CORS is enabled for all origins (`*`), so the frontend can call the API from any
 
 ## Environment Variables
 
-| Variable         | Description                                                |
-| ---------------- | ---------------------------------------------------------- |
-| `GEMINI_API_KEY` | Your Google Gemini API key (required for email generation) |
-| `SMTP_USER`      | SMTP sender email (defaults to `elijah@coresight.com`)     |
-| `SMTP_PASS`      | SMTP password / app password for Office 365                |
+| Variable         | Description                                                  |
+| ---------------- | ------------------------------------------------------------ |
+| `GEMINI_API_KEY` | Your Google Gemini API key (required for email generation)   |
+| `SMTP_USER`      | SMTP sender email (defaults to `elijahandrew1610@gmail.com`) |
+| `SMTP_PASS`      | SMTP password / app password for Gmail                       |
 
 ### Running the Server
 
