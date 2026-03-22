@@ -114,13 +114,27 @@ app.get('/', (c) => {
 
 // Endpoint to get all leads
 app.get('/api/leads', (c) => {
-  return c.json(leads)
+  const search = c.req.query('search');
+  let result = leads;
+  
+  if (search) {
+    const s = search.toLowerCase();
+    result = leads.filter(l => 
+      (l.name && l.name.toLowerCase().includes(s)) ||
+      (l.title && l.title.toLowerCase().includes(s)) ||
+      (l.company && l.company.toLowerCase().includes(s)) ||
+      (l.email && l.email.toLowerCase().includes(s))
+    );
+  }
+  
+  return c.json(result)
 })
 
 // Endpoint to get hubspot contacts with pagination
 app.get('/api/hubspot/contacts', async (c) => {
   const limitStr = c.req.query('limit') || '50'
   const offsetStr = c.req.query('offset') || '0'
+  const search = c.req.query('search')
   
   const limit = parseInt(limitStr, 10)
   const offset = parseInt(offsetStr, 10)
@@ -129,11 +143,25 @@ app.get('/api/hubspot/contacts', async (c) => {
     return c.json({ error: 'invalid limit or offset parameters' }, 400)
   }
   
-  await ensureHubspotContacts(offset + limit)
+  if (!search) {
+    await ensureHubspotContacts(offset + limit)
+  }
   
-  const paginatedContacts = hubspotContacts.slice(offset, offset + limit)
+  let filteredContacts = hubspotContacts;
+  if (search) {
+    const s = search.toLowerCase();
+    filteredContacts = hubspotContacts.filter(contact => {
+      const fn = contact.properties?.firstname?.toLowerCase() || '';
+      const ln = contact.properties?.lastname?.toLowerCase() || '';
+      const em = contact.properties?.email?.toLowerCase() || '';
+      const comp = contact.properties?.company?.toLowerCase() || '';
+      return fn.includes(s) || ln.includes(s) || em.includes(s) || comp.includes(s);
+    });
+  }
+  
+  const paginatedContacts = filteredContacts.slice(offset, offset + limit)
   return c.json({
-    total: hubspotContacts.length,
+    total: filteredContacts.length,
     limit,
     offset,
     results: paginatedContacts
@@ -151,12 +179,27 @@ app.get('/api/hubspot/contacts/:count', async (c) => {
   
   const offsetStr = c.req.query('offset') || '0'
   const offset = parseInt(offsetStr, 10) || 0
+  const search = c.req.query('search')
   
-  await ensureHubspotContacts(offset + count)
+  if (!search) {
+    await ensureHubspotContacts(offset + count)
+  }
   
-  const paginatedContacts = hubspotContacts.slice(offset, offset + count)
+  let filteredContacts = hubspotContacts;
+  if (search) {
+    const s = search.toLowerCase();
+    filteredContacts = hubspotContacts.filter(contact => {
+      const fn = contact.properties?.firstname?.toLowerCase() || '';
+      const ln = contact.properties?.lastname?.toLowerCase() || '';
+      const em = contact.properties?.email?.toLowerCase() || '';
+      const comp = contact.properties?.company?.toLowerCase() || '';
+      return fn.includes(s) || ln.includes(s) || em.includes(s) || comp.includes(s);
+    });
+  }
+  
+  const paginatedContacts = filteredContacts.slice(offset, offset + count)
   return c.json({
-    total: hubspotContacts.length,
+    total: filteredContacts.length,
     limit: count,
     offset,
     results: paginatedContacts
