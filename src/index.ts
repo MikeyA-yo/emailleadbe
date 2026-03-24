@@ -595,30 +595,92 @@ app.post('/api/bulk-generate-email', async (c) => {
   try {
     const body = await c.req.json();
     const { groupId, identifiers, context } = body;
-    let targets: { identifier: string; company?: string }[] = [];
+    let targets: { identifier: string; name?: string; company?: string }[] = [];
 
     if (groupId) {
       const group = await Group.findById(groupId);
       if (!group) return c.json({ error: 'Group not found' }, 404);
-      targets = group.contacts.map((contact: any) => ({ identifier: contact.identifier, company: contact.company }));
+      targets = group.contacts.map((contact: any) => ({ identifier: contact.identifier, name: contact.name, company: contact.company }));
     } else if (Array.isArray(identifiers)) {
       targets = identifiers.map(id => typeof id === 'string' ? { identifier: id } : id);
     } else {
       return c.json({ error: 'Must provide groupId or an array of identifiers' }, 400);
     }
 
-    // Process concurrently
-    const results = await Promise.allSettled(
-      targets.map(t => generateEmailForLead(t.identifier, t.company, context))
-    );
+    // 1. Ask Gemini to generate a single master template for the entire group
+    const prompt = `
+You are an expert sales development representative (SDR) working for Coresight Research (coresight.com). 
+Coresight Research delivers data-driven insights focusing on retail and technology, helping businesses navigate disruption reshaping global retail through proprietary intelligence and a global community of industry leaders.
 
-    const generated = results.map((result, index) => {
-      if (result.status === 'fulfilled') {
-        return { identifier: targets[index].identifier, success: true, ...result.value };
-      } else {
-        return { identifier: targets[index].identifier, success: false, error: result.reason?.message || 'Failed' };
-      }
+You are writing a SINGLE bulk outreach email campaign template that will be sent to a specific group of targeted professionals.
+
+User Instructions / Campaign Topic Context:
+${context || 'General introduction to Coresight Research and an offer to share retail/tech insights.'}
+
+Your goal is to write a natural, professional cold email template aiming to start a conversation. 
+
+CRITICAL: You MUST use exactly these literal variables where appropriate so our system can automatically replace them:
+Wait, use these EXACT strings:
+- {{Name}} for the recipient's first name or full name
+- {{Company}} for the recipient's company
+
+Do NOT sound like a generic AI or use placeholders (like [Your Name]). 
+Sign off naturally as an SDR from Coresight Research (e.g. "Sales Development Representative / Coresight Research").
+Keep the tone concise and low-pressure.
+
+Format:
+Subject: [Your suggested subject line]
+
+Hi {{Name}},
+
+[Body containing {{Company}} if it makes sense]
+...
+    `.trim();
+
+    const aiRes = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: prompt,
     });
+
+    const templateText = aiRes.text || "Subject: Hello from Coresight\n\nHi {{Name}},\n\nI hope you are having a great week at {{Company}}.\n\nBest,\nSales Development Representative\nCoresight Research";
+
+    // 2. Hydrate the template locally for each targeted user to avoid LLM rate limits
+    const generated = await Promise.all(targets.map(async (t) => {
+      let leadName = t.name;
+      let leadCompany = t.company;
+
+      if (!leadName || !leadCompany) {
+        // Try to pull data from locally stored leads
+        const l = leads.find(lead => lead.email === t.identifier || lead.profileUrl === t.identifier || lead.name === t.identifier || lead.url === t.identifier);
+        if (l) {
+          leadName = leadName || l.name;
+          leadCompany = leadCompany || l.company;
+        } else {
+          // Try to pull data from locally stored HubSpot cache
+          const hs = hubspotContacts.find(c => c.id === t.identifier || (c.properties && c.properties.email === t.identifier));
+          if (hs && hs.properties) {
+             leadName = leadName || `${hs.properties.firstname || ''} ${hs.properties.lastname || ''}`.trim();
+             leadCompany = leadCompany || hs.properties.company;
+          }
+        }
+      }
+
+      // Fallbacks if data is truly blank
+      const safeName = leadName || 'there'; 
+      const safeCompany = leadCompany || 'your company';
+
+      // Perform replacement
+      let customText = templateText
+        .replace(/\{\{Name\}\}/ig, safeName)
+        .replace(/\{\{Company\}\}/ig, safeCompany);
+
+      return {
+        identifier: t.identifier,
+        success: true,
+        text: customText,
+        leadName: safeName
+      };
+    }));
 
     return c.json({ results: generated });
   } catch (err: any) {

@@ -286,13 +286,24 @@ Removes a specific contact from the group by their exact `identifier`. (For emai
 
 ### 6.6 Generate Bulk Emails
 **POST** `/api/bulk-generate-email`
-Pass a `groupId` to generate emails for an entire saved group, or pass an array of `identifiers` manually.
+Generates a unique, high-quality email template specifically for your provided `context` (the campaign topic). The backend automatically handles replacing `{{Name}}` and `{{Company}}` locally for everyone in the group, ensuring you never hit AI rate limits.
+
+You can supply a `groupId` to target a saved group, or an array of raw `identifiers`.
+
+**Request Body:**
 ```json
 {
   "groupId": "64abcdef1234567890abcdef",
-  "context": "Mention our new AI pricing model."
+  "context": "We just published a new research brief on AI in retail. Ask if they are exploring this topic."
 }
 ```
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `groupId` | `string` | The ID of the saved group. |
+| `identifiers` | `array` | Optional alternative: Array of strings (HubSpot IDs/emails) to target directly instead of a `groupId`. |
+| `context` | `string` | The campaign topic/instructions. The AI uses this exactly to craft the specific master group template! |
+
 **Returns:**
 ```json
 {
