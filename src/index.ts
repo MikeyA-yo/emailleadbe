@@ -37,15 +37,64 @@ const Group = mongoose.models.Group || mongoose.model('Group', groupSchema);
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })
 
-// Load leads
-const leadsPath = join(process.cwd(), 'src', 'leads.json')
-let leads: any[] = []
-try {
-  const data = readFileSync(leadsPath, 'utf8')
-  leads = JSON.parse(data)
-} catch (e) {
-  console.error("Error loading leads.json:", e)
+function loadJsonArray(relativePath: string, label: string): any[] {
+  try {
+    const filePath = join(process.cwd(), 'src', relativePath)
+    const data = readFileSync(filePath, 'utf8')
+    const parsed = JSON.parse(data)
+    return Array.isArray(parsed) ? parsed : []
+  } catch (e) {
+    console.error(`Error loading ${label}:`, e)
+    return []
+  }
 }
+
+function normalizeLinkedinLead(lead: any) {
+  const normalizedCompany = lead.company || lead.companyName || ''
+  const normalizedCompanyWebsite = lead.companyWebsite || lead.website || ''
+  const normalizedProfileUrl = lead.profileUrl || lead.url || ''
+  const normalizedEmail = lead.email || (Array.isArray(lead.emails) ? lead.emails[0] : undefined)
+
+  return {
+    ...lead,
+    profileUrl: normalizedProfileUrl,
+    url: lead.url || normalizedProfileUrl,
+    company: normalizedCompany,
+    companyName: lead.companyName || normalizedCompany,
+    companyWebsite: normalizedCompanyWebsite,
+    email: normalizedEmail,
+  }
+}
+
+function getLeadIdentityKey(lead: any) {
+  return (
+    lead.profileUrl ||
+    lead.url ||
+    lead.email ||
+    lead.name ||
+    JSON.stringify(lead)
+  ).toLowerCase()
+}
+
+// Load and merge lead sources with LinkedIn-first precedence/order
+const baseLeads = loadJsonArray('leads.json', 'leads.json')
+const linkedinLeadsRaw = loadJsonArray('linkedin.json', 'linkedin.json')
+const linkedinLeads = linkedinLeadsRaw.map(normalizeLinkedinLead)
+
+const leadMap = new Map<string, any>()
+for (const lead of linkedinLeads) {
+  leadMap.set(getLeadIdentityKey(lead), lead)
+}
+
+for (const lead of baseLeads) {
+  const key = getLeadIdentityKey(lead)
+  if (!leadMap.has(key)) {
+    leadMap.set(key, lead)
+  }
+}
+
+let leads: any[] = Array.from(leadMap.values())
+console.log(`Loaded ${linkedinLeads.length} LinkedIn leads first, plus ${baseLeads.length} base leads (deduped)`)
 
 // Load hubspot contacts
 const hubspotPath = join(process.cwd(), 'src', 'hubspot.json')

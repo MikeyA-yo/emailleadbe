@@ -43,6 +43,8 @@
     "title": "CEO at SomeCompany",
     "location": "London, United Kingdom",
     "company": "SomeCompany",
+    "companyName": "SomeCompany",
+    "companyWebsite": "https://somecompany.com",
     "about": "",
     "experience": "...",
     "isCSuite": true,
@@ -62,6 +64,8 @@
 | `name`          | `string`  | Full name of the lead                                      |
 | `title`         | `string`  | Job title                                                  |
 | `company`       | `string?` | Company name                                               |
+| `companyName`   | `string?` | Company name from LinkedIn source data                     |
+| `companyWebsite`| `string?` | Company website from LinkedIn source data                  |
 | `location`      | `string?` | Geographic location                                        |
 | `about`         | `string?` | Bio / about section                                        |
 | `experience`    | `string?` | Work experience text                                       |
@@ -69,7 +73,7 @@
 | `isCSuite`      | `boolean` | Whether the lead is a C-suite executive                    |
 | `searchKeyword` | `string?` | The keyword used to find this lead                         |
 
-> **Note:** Some leads use `url` while others use `profileUrl` for the LinkedIn link. The API handles both when looking up a lead.
+> **Note:** LinkedIn-related workflows use `src/linkedin.json` as the primary source, then merge non-duplicate records from `src/leads.json`. If both files contain the same lead, the `linkedin.json` record is kept. The backend also normalizes LinkedIn records so `companyName` maps into `company`, and `companyWebsite` is preserved.
 
 ---
 

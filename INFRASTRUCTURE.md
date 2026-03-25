@@ -44,9 +44,15 @@ The Hono server exposes the following RESTful endpoints to coordinate with the f
 - **`GET /`**: Server healthcheck endpoint.
 
 ### Data Aggregation
-- **`GET /api/leads`**: Returns the statically scraped leads from `leads.json`.
+- **`GET /api/leads`**: Returns merged static leads with `linkedin.json` loaded first, then non-duplicate records from `leads.json`.
 - **`GET /api/hubspot/contacts`**: Returns paginated HubSpot contacts (queries: `limit`, `offset`). Triggers the HubSpot API bridge if the requested offset requires more data than what currently exists in memory.
 - **`GET /api/hubspot/contacts/:count`**: Returns a designated count of contacts. Allows an `offset` query to bypass the first `n` contacts while supporting the auto-fetch bridge.
+
+Lead normalization details:
+- LinkedIn records are normalized at load time so `companyName` is mapped into `company`.
+- `companyWebsite` is preserved on each lead object for LinkedIn-related processing.
+- If the same lead exists in both files, the `linkedin.json` version takes precedence.
+- Identity matching continues to support `email`, `profileUrl`, `url`, and `name`.
 
 ### Processing & Action
 - **`POST /api/generate-email`**: 
