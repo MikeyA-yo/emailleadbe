@@ -28,6 +28,31 @@ Steps 2 and 3 of the public search flow are complementary — run 3 on the outpu
 
 ---
 
+## Lead Verification Pipeline (NEW)
+
+Autonomous AI agent that compares HubSpot CRM data against live LinkedIn profiles and categorizes each lead:
+
+```
+1. POST /api/verification/run              → Scan HubSpot contacts, find LinkedIn, compare & categorize
+2. GET  /api/verification/results          → Browse results filtered by status (Match/Stale/Discrepancy)
+3. GET  /api/verification/stats            → Dashboard summary counts
+4. POST /api/verification/sync/:id         → Push corrected data back to HubSpot (single)
+5. POST /api/verification/sync-bulk        → Push corrected data back to HubSpot (batch)
+6. POST /api/verification/discard/:id      → Soft-delete a result
+```
+
+**Verification Statuses:**
+| Status | Meaning |
+| --- | --- |
+| `match` | HubSpot data matches LinkedIn — lead is verified and current. |
+| `stale` | Lead has **moved to a different company**. New company & title identified. |
+| `discrepancy` | Lead is at the **same company** but has a **different job title** (e.g. promotion). |
+| `not_found` | Could not find a LinkedIn profile for this contact. |
+| `error` | An error occurred during verification (e.g. LinkedIn blocked the fetch). |
+| `unverified` | Verification could not be completed (insufficient data). |
+
+---
+
 ## Endpoints
 
 ### 1. Health Check
@@ -47,6 +72,12 @@ Steps 2 and 3 of the public search flow are complementary — run 3 on the outpu
 | **Method**   | `GET`                                      |
 | **URL**      | `/api/leads`                               |
 | **Response** | `application/json` — Array of lead objects |
+
+#### Query Parameters
+
+| Param | Type | Description |
+| --- | --- | --- |
+| `search` | `string` | Filter leads by name, title, company, or email |
 
 #### Response Example
 
@@ -278,7 +309,6 @@ Steps 2 and 3 of the public search flow are complementary — run 3 on the outpu
 | `notes_last_activity_date` | Date of the contact's last recorded activity in HubSpot. `null` if blank. |
 | `hs_email_last_open_date` | Last date the contact opened an email sent via HubSpot. |
 | `hs_email_last_click_date` | Last date the contact clicked a link in a HubSpot email. |
-```
 
 ---
 
@@ -357,7 +387,6 @@ Fetches contacts **directly from the HubSpot API** on every call (no in-memory c
 | `found` | Contacts for which a LinkedIn profile was found |
 | `notFound` | Contacts where Gemini could not find a confident match |
 | `nextCursor` | Pass as `after` in the next request to get the next page. `null` means no more pages. |
-```
 
 #### Recommended flow
 
@@ -536,6 +565,276 @@ Pass an array of emails to logically send them all concurrently.
 
 ---
 
+## 8. Lead Verification & Enrichment (NEW)
+
+The verification system compares HubSpot CRM data against real-time LinkedIn profiles to detect job changes, promotions, and stale leads.
+
+### 8.1 Run Verification
+**POST** `/api/verification/run`
+
+Triggers AI-powered verification for a batch of HubSpot contacts. For each contact, the agent:
+1. Discovers their LinkedIn profile (using existing HubSpot URL or Gemini agent search)
+2. Fetches the LinkedIn profile and extracts current company + title
+3. Compares HubSpot data vs LinkedIn data using AI semantic matching
+4. Categorizes the lead as `match`, `stale`, or `discrepancy`
+5. Generates an AI summary blurb explaining the finding
+
+#### Request Body
+
+```json
+{
+  "filters": {
+    "industry": "Retail",
+    "company": "Nike",
+    "role": "Director",
+    "region": "California",
+    "lastUpdatedDays": 90,
+    "leadStatus": "New"
+  },
+  "limit": 10,
+  "after": "optional-cursor-from-previous-response"
+}
+```
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `filters.industry` | `string` | — | Filter HubSpot contacts by industry |
+| `filters.company` | `string` | — | Filter by company name |
+| `filters.role` | `string` | — | Filter by job title |
+| `filters.region` | `string` | — | Filter by state, city, or country |
+| `filters.lastUpdatedDays` | `number` | — | Only include contacts whose last activity date is **older** than N days |
+| `filters.leadStatus` | `string` | — | Filter by HubSpot lead status (e.g. `"New"`, `"Open"`, `"In Progress"`, `"Open Deal"`, `"Unqualified"`, `"Attempted to Contact"`, `"Connected"`, `"Bad Timing"`) |
+| `limit` | `number` | `10` | How many contacts to process per call. Max `25`. |
+| `after` | `string` | — | Pagination cursor from a previous response |
+
+#### Success Response
+
+```json
+{
+  "batchId": "batch_1713020000000",
+  "processed": 10,
+  "results": {
+    "match": 5,
+    "stale": 3,
+    "discrepancy": 1,
+    "not_found": 1,
+    "error": 0,
+    "unverified": 0
+  },
+  "nextCursor": "abc123",
+  "verifications": [
+    {
+      "_id": "663a...",
+      "hubspotContactId": "12345",
+      "hubspotData": {
+        "firstName": "John",
+        "lastName": "Smith",
+        "fullName": "John Smith",
+        "company": "Nike",
+        "jobTitle": "Director of Marketing",
+        "email": "john@nike.com",
+        "industry": "Retail",
+        "leadStatus": "New"
+      },
+      "linkedinData": {
+        "profileUrl": "https://linkedin.com/in/johnsmith",
+        "name": "John Smith",
+        "currentCompany": "Adidas",
+        "currentTitle": "Senior Director of Digital Commerce",
+        "headline": "Senior Director at Adidas",
+        "location": "Portland, OR"
+      },
+      "status": "stale",
+      "changes": {
+        "previousCompany": "Nike",
+        "previousTitle": "Director of Marketing",
+        "newCompany": "Adidas",
+        "newTitle": "Senior Director of Digital Commerce",
+        "companyChanged": true,
+        "titleChanged": true
+      },
+      "aiSummary": "John moved from Nike to Adidas, now serving as Senior Director of Digital Commerce.",
+      "aiConfidence": 0.92,
+      "batchId": "batch_1713020000000",
+      "verifiedAt": "2026-04-13T18:00:00.000Z",
+      "hubspotSyncedAt": null,
+      "discarded": false
+    }
+  ]
+}
+```
+
+| Field | Description |
+| --- | --- |
+| `batchId` | Unique ID for this verification run. Use for filtering or bulk sync. |
+| `processed` | Total contacts fetched from HubSpot |
+| `results` | Count of verifications by status |
+| `nextCursor` | Pass as `after` to process the next page. `null` = no more pages. |
+| `verifications` | Array of full verification result objects |
+
+---
+
+### 8.2 Get Verification Results
+**GET** `/api/verification/results`
+
+Returns paginated, filterable verification results for the dashboard.
+
+#### Query Parameters
+
+| Param | Type | Default | Description |
+| --- | --- | --- | --- |
+| `status` | `string` | `all` | Filter by status: `match`, `stale`, `discrepancy`, `not_found`, `error`, or `all` |
+| `batchId` | `string` | — | Filter by batch ID |
+| `limit` | `number` | `50` | Max results per page (max: 200) |
+| `offset` | `number` | `0` | Pagination offset |
+| `search` | `string` | — | Search by name, company, or email |
+| `discarded` | `boolean` | `false` | Set to `true` to include discarded results |
+
+#### Success Response
+
+```json
+{
+  "results": [ /* array of verification result objects */ ],
+  "total": 150,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+---
+
+### 8.3 Get Single Verification Result
+**GET** `/api/verification/results/:id`
+
+Returns a single verification result by its MongoDB `_id`.
+
+---
+
+### 8.4 Get Verification Stats
+**GET** `/api/verification/stats`
+
+Returns dashboard summary statistics.
+
+```json
+{
+  "total": 500,
+  "match": 380,
+  "stale": 75,
+  "discrepancy": 40,
+  "not_found": 5,
+  "error": 0,
+  "unverified": 0,
+  "lastRunAt": "2026-04-13T18:00:00.000Z",
+  "averageConfidence": 0.87
+}
+```
+
+---
+
+### 8.5 Sync to HubSpot (Single)
+**POST** `/api/verification/sync/:id`
+
+Pushes corrected data back to HubSpot for a verified lead. Updates:
+- `company` — if the lead moved (stale)
+- `jobtitle` — if the lead has a new role (stale or discrepancy)
+- `lead_verification_status` — custom property (auto-created if missing)
+- `lead_last_verified_at` — custom property (auto-created if missing)
+
+#### Success Response — Match (no update needed)
+
+```json
+{
+  "success": true,
+  "message": "No update needed — HubSpot data already matches LinkedIn.",
+  "hubspotContactId": "12345"
+}
+```
+
+#### Success Response — Stale/Discrepancy (updated)
+
+```json
+{
+  "success": true,
+  "message": "HubSpot contact 12345 updated successfully.",
+  "updatedProperties": {
+    "company": "Adidas",
+    "jobtitle": "Senior Director of Digital Commerce",
+    "lead_verification_status": "stale",
+    "lead_last_verified_at": "2026-04-13T18:30:00.000Z"
+  },
+  "hubspotContactId": "12345"
+}
+```
+
+---
+
+### 8.6 Sync to HubSpot (Bulk)
+**POST** `/api/verification/sync-bulk`
+
+Bulk writes verified data back to HubSpot.
+
+#### Request Body
+
+```json
+{
+  "verificationIds": ["id1", "id2", "id3"]
+}
+```
+*or:*
+```json
+{
+  "batchId": "batch_1713020000000"
+}
+```
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `verificationIds` | `array` | Specific verification result IDs to sync |
+| `batchId` | `string` | Sync all stale/discrepancy results from a batch |
+
+#### Success Response
+
+```json
+{
+  "success": true,
+  "synced": 8,
+  "failed": 1,
+  "results": [
+    {
+      "id": "663a...",
+      "hubspotContactId": "12345",
+      "success": true,
+      "status": "stale",
+      "updatedProperties": { "company": "Adidas", "jobtitle": "Senior Director" }
+    },
+    {
+      "id": "663b...",
+      "hubspotContactId": "67890",
+      "success": false,
+      "status": "discrepancy",
+      "error": "HubSpot returned 403"
+    }
+  ]
+}
+```
+
+---
+
+### 8.7 Discard Verification Result
+**POST** `/api/verification/discard/:id`
+
+Soft-deletes a verification result. It will no longer appear in default result queries but can be viewed with `?discarded=true`.
+
+```json
+{
+  "success": true,
+  "id": "663a...",
+  "discarded": true
+}
+```
+
+---
+
 ## Frontend Integration Examples
 
 ### Fetch All Leads
@@ -590,6 +889,47 @@ if (data.success) {
 }
 ```
 
+### Run Lead Verification
+
+```javascript
+// Step 1: Trigger verification for a batch of contacts
+const verifyResponse = await fetch("http://localhost:5000/api/verification/run", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    filters: {
+      industry: "Retail",
+      lastUpdatedDays: 90,
+    },
+    limit: 10,
+  }),
+});
+
+const verifyData = await verifyResponse.json();
+console.log(`Match: ${verifyData.results.match}, Stale: ${verifyData.results.stale}, Discrepancy: ${verifyData.results.discrepancy}`);
+
+// Step 2: Browse results filtered by status
+const staleResponse = await fetch("http://localhost:5000/api/verification/results?status=stale");
+const staleLeads = await staleResponse.json();
+
+// Step 3: Get dashboard stats
+const statsResponse = await fetch("http://localhost:5000/api/verification/stats");
+const stats = await statsResponse.json();
+
+// Step 4: Sync a verified lead back to HubSpot
+const syncResponse = await fetch(`http://localhost:5000/api/verification/sync/${verifyData.verifications[0]._id}`, {
+  method: "POST",
+});
+const syncData = await syncResponse.json();
+
+// Step 5: Bulk sync all stale/discrepancy results from a batch
+const bulkSyncResponse = await fetch("http://localhost:5000/api/verification/sync-bulk", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ batchId: verifyData.batchId }),
+});
+```
+
 ---
 
 ## CORS
@@ -602,9 +942,12 @@ CORS is enabled for all origins (`*`), so the frontend can call the API from any
 
 | Variable         | Description                                                  |
 | ---------------- | ------------------------------------------------------------ |
-| `GEMINI_API_KEY` | Your Google Gemini API key (required for email generation)   |
+| `GEMINI_API_KEY` | Your Google Gemini API key (required for email generation and verification) |
+| `HUBSPOT_TOKEN`  | HubSpot Private App Token for CRM read/write operations      |
+| `MONGODB_URI`    | MongoDB connection string (required for groups, agent leads, and verification) |
 | `SMTP_USER`      | SMTP sender email (defaults to `elijahandrew1610@gmail.com`) |
 | `SMTP_PASS`      | SMTP password / app password for Gmail                       |
+| `AGENT_MIN_CONFIDENCE` | Minimum confidence threshold for agent leads (default: `0.65`) |
 
 ### Running the Server
 
