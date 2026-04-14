@@ -291,7 +291,7 @@ Autonomous AI agent that compares HubSpot CRM data against live LinkedIn profile
         "industry": "Retail",
         "hs_email_last_open_date": "2024-05-12T08:32:00Z",
         "hs_email_last_click_date": "2024-05-13T10:00:00Z",
-        "notes_last_activity_date": "2024-06-01T00:00:00Z"
+        "lastmodifieddate": "2024-06-01T00:00:00Z"
       }
     }
   ],
@@ -306,9 +306,38 @@ Autonomous AI agent that compares HubSpot CRM data against live LinkedIn profile
 | Property | Description |
 | --- | --- |
 | `industry` | Industry as set in HubSpot (e.g. `"Retail"`, `"Real Estate"`). `null` if not set. |
-| `notes_last_activity_date` | Date of the contact's last recorded activity in HubSpot. `null` if blank. |
+| `lastmodifieddate` | Date the contact was last modified in HubSpot. `null` if blank. (Replaced `notes_last_activity_date` which does not exist in HubSpot.) |
 | `hs_email_last_open_date` | Last date the contact opened an email sent via HubSpot. |
 | `hs_email_last_click_date` | Last date the contact clicked a link in a HubSpot email. |
+
+---
+
+### 5.1 HubSpot Diagnostics — Property Definitions
+**GET** `/api/hubspot/diagnostics/properties`
+
+Returns HubSpot property metadata (type, fieldType, valid options) for the filter fields used by the search and verification endpoints. Useful for debugging operator mismatches.
+
+```json
+{
+  "company": { "name": "company", "label": "Company Name", "type": "string", "fieldType": "text" },
+  "jobtitle": { "name": "jobtitle", "label": "Job Title", "type": "string", "fieldType": "text" },
+  "hs_lead_status": { "name": "hs_lead_status", "type": "enumeration", "options": [...] }
+}
+```
+
+### 5.2 HubSpot Diagnostics — Sample Contacts
+**GET** `/api/hubspot/diagnostics/sample`
+
+Fetches 20 contacts directly from the HubSpot API with real property values. Useful for verifying what data actually exists in the CRM.
+
+```json
+{
+  "sampleSize": 20,
+  "sample": [
+    { "id": "123", "firstname": "Jane", "lastname": "Doe", "company": "Acme", "jobtitle": "VP Sales", ... }
+  ]
+}
+```
 
 ---
 
@@ -602,8 +631,8 @@ Triggers AI-powered verification for a batch of HubSpot contacts. For each conta
 | `filters.company` | `string` | — | Filter by company name |
 | `filters.role` | `string` | — | Filter by job title |
 | `filters.region` | `string` | — | Filter by state, city, or country |
-| `filters.lastUpdatedDays` | `number` | — | Only include contacts whose last activity date is **older** than N days |
-| `filters.leadStatus` | `string` | — | Filter by HubSpot lead status (e.g. `"New"`, `"Open"`, `"In Progress"`, `"Open Deal"`, `"Unqualified"`, `"Attempted to Contact"`, `"Connected"`, `"Bad Timing"`) |
+| `filters.lastUpdatedDays` | `number` | — | Only include contacts whose `lastmodifieddate` is **older** than N days (converted to millisecond timestamp internally) |
+| `filters.leadStatus` | `string` | — | Filter by HubSpot lead status. Valid values: `"NEW"`, `"IN_PROGRESS"`, `"CONNECTED"`, `"OPEN_DEAL"`, `"UNQUALIFIED"`, `"BAD_TIMING"` (case-sensitive, uses `EQ` operator) |
 | `limit` | `number` | `10` | How many contacts to process per call. Max `25`. |
 | `after` | `string` | — | Pagination cursor from a previous response |
 

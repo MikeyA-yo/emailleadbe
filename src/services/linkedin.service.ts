@@ -82,54 +82,109 @@ interface GeminiSearchResult {
   intel: { name: string; title: string; company: string } | null
 }
 
+// Clean up filler phrases from regex-extracted titles
+// e.g. "individual is currently working as a Creative Director" → "Creative Director"
+function cleanExtractedTitle(title: string): string {
+  return title
+    .replace(/^(?:this\s+)?(?:individual|person|they?)\s+(?:is\s+)?(?:currently\s+)?(?:working\s+as\s+)?(?:a\s+|an\s+)?/i, '')
+    .replace(/^(?:currently\s+)?(?:working\s+as\s+)?(?:a\s+|an\s+)?/i, '')
+    .replace(/^(?:identified\s+as\s+)?(?:a\s+|an\s+)?/i, '')
+    .trim()
+}
+
+// Single Gemini grounding attempt — returns response text + grounding metadata
+async function attemptGeminiGrounding(prompt: string): Promise<{
+  text: string
+  groundingMeta: any
+  groundingUrls: string[]
+  allUrls: string[]
+  groundingFired: boolean
+}> {
+  const response = await ai.models.generateContent({
+    model: GEMINI_MODEL,
+    contents: prompt,
+    config: {
+      tools: [{ googleSearch: {} }],
+    },
+  })
+
+  const text = (response.text || '').trim()
+  const groundingMeta = (response as any).candidates?.[0]?.groundingMetadata
+
+  let groundingUrls: string[] = []
+  if (groundingMeta?.groundingChunks) {
+    for (const chunk of groundingMeta.groundingChunks) {
+      if (chunk.web?.uri && chunk.web.uri.includes('linkedin.com/in/')) {
+        groundingUrls.push(chunk.web.uri)
+      }
+    }
+  }
+
+  // Extract URLs from text
+  const urlRegexFull = /https?:\/\/(?:www\.)?linkedin\.com\/in\/[a-zA-Z0-9_%-]+/g
+  const urlRegexBare = /(?:www\.)?linkedin\.com\/in\/[a-zA-Z0-9_%-]+/g
+  const textUrlsFull = text.match(urlRegexFull) || []
+  const textUrlsBare = (text.match(urlRegexBare) || []).map(u =>
+    u.startsWith('http') ? u : `https://${u.startsWith('www.') ? u : 'www.' + u}`
+  )
+  const allUrls = [...new Set([...groundingUrls, ...textUrlsFull, ...textUrlsBare])]
+
+  // Grounding "fired" if we got groundingChunks or groundingSupports (not just searchEntryPoint/webSearchQueries)
+  const groundingFired = !!(groundingMeta?.groundingChunks || groundingMeta?.groundingSupports)
+
+  return { text, groundingMeta, groundingUrls, allUrls, groundingFired }
+}
+
 async function searchLinkedInWithGemini(name: string, company: string, jobTitle: string): Promise<GeminiSearchResult> {
   try {
-    // Step 1: Use grounding to SEARCH — ask in natural language, no JSON constraint
-    // This encourages the model to actually trigger the Google Search tool
-    const response = await ai.models.generateContent({
-      model: GEMINI_MODEL,
-      contents: `Search Google for the LinkedIn profile of ${name} who works at ${company} as ${jobTitle}.
+    // Attempt 1: standard prompt
+    const prompt1 = `Search Google for the LinkedIn profile of ${name} who works at ${company} as ${jobTitle}.
 
 I need to know:
 1. What is their LinkedIn profile URL (linkedin.com/in/...)?
 2. What company do they currently work at according to LinkedIn?
 3. What is their current job title according to LinkedIn?
 
-Please search and tell me what you find.`,
-      config: {
-        tools: [{ googleSearch: {} }],
-      },
-    })
+Please search and tell me what you find.`
 
-    const text = (response.text || '').trim()
-    console.log(`[LinkedIn Gemini Search] "${name}" at "${company}" → response: ${text.substring(0, 500)}`)
+    let result = await attemptGeminiGrounding(prompt1)
+    console.log(`[LinkedIn Gemini Search] "${name}" at "${company}" → response: ${result.text.substring(0, 500)}`)
 
-    // Extract URLs from grounding metadata
-    const groundingMeta = (response as any).candidates?.[0]?.groundingMetadata
-    let groundingUrls: string[] = []
-    if (groundingMeta?.groundingChunks) {
-      for (const chunk of groundingMeta.groundingChunks) {
-        if (chunk.web?.uri && chunk.web.uri.includes('linkedin.com/in/')) {
-          groundingUrls.push(chunk.web.uri)
-        }
-      }
-    }
-    if (groundingMeta) {
-      console.log(`[LinkedIn Gemini Search] Grounding metadata present: ${JSON.stringify(Object.keys(groundingMeta))}`)
+    if (result.groundingMeta) {
+      console.log(`[LinkedIn Gemini Search] Grounding metadata present: ${JSON.stringify(Object.keys(result.groundingMeta))}`)
     } else {
       console.log(`[LinkedIn Gemini Search] No grounding metadata — search may not have triggered`)
     }
 
-    // Extract URLs from the text response — match with AND without https:// prefix
-    const urlRegexFull = /https?:\/\/(?:www\.)?linkedin\.com\/in\/[a-zA-Z0-9_%-]+/g
-    const urlRegexBare = /(?:www\.)?linkedin\.com\/in\/[a-zA-Z0-9_%-]+/g
-    const textUrlsFull = text.match(urlRegexFull) || []
-    const textUrlsBare = (text.match(urlRegexBare) || []).map(u =>
-      u.startsWith('http') ? u : `https://${u.startsWith('www.') ? u : 'www.' + u}`
-    )
-    const allUrls = [...new Set([...groundingUrls, ...textUrlsFull, ...textUrlsBare])]
+    // Attempt 2: retry with rephrased prompt if grounding didn't fire
+    if (!result.groundingFired) {
+      console.log(`[LinkedIn Gemini Search] Grounding didn't fire for "${name}" — retrying with rephrased prompt`)
+      const prompt2 = `Find information about ${name} ${company} on LinkedIn. What is their current role and company? Search for "${name} ${company} LinkedIn" and tell me what you find about this person.`
 
-    // Step 2: Extract structured intel from the prose response
+      const retry = await attemptGeminiGrounding(prompt2)
+      console.log(`[LinkedIn Gemini Search] Retry response: ${retry.text.substring(0, 300)}`)
+      if (retry.groundingMeta) {
+        console.log(`[LinkedIn Gemini Search] Retry grounding metadata: ${JSON.stringify(Object.keys(retry.groundingMeta))}`)
+      }
+
+      // Use retry result if it got better grounding, otherwise merge URLs
+      if (retry.groundingFired) {
+        console.log(`[LinkedIn Gemini Search] Retry succeeded — grounding fired`)
+        result = retry
+      } else {
+        console.log(`[LinkedIn Gemini Search] Retry also failed — no grounding on either attempt`)
+        // Merge any URLs found across both attempts
+        result.allUrls = [...new Set([...result.allUrls, ...retry.allUrls])]
+        // Use the longer text response (more likely to have useful info)
+        if (retry.text.length > result.text.length) {
+          result.text = retry.text
+        }
+      }
+    }
+
+    const { text, allUrls } = result
+
+    // Extract structured intel from the prose response
     let intel: GeminiSearchResult['intel'] = null
     if (text.length > 30) {
       // First try: regex patterns to extract company/title from common phrasings
@@ -137,14 +192,20 @@ Please search and tell me what you find.`,
       const roleAtCompanyRegex = /(?:is\s+(?:a\s+|an\s+|currently\s+(?:a\s+|an\s+)?)?)([\w\s,]+?)\s+at\s+([\w\s&.,]+?)(?:\.|,|\s+(?:a\s|and\s|who\s|in\s|based|since|where|Her|His|The|$))/gi
       const matches = [...text.matchAll(roleAtCompanyRegex)]
       if (matches.length > 0) {
-        // Take the first match as the most likely current role
         const bestMatch = matches[0]
-        intel = {
-          name,
-          title: bestMatch[1].trim(),
-          company: bestMatch[2].trim(),
+        let extractedTitle = cleanExtractedTitle(bestMatch[1].trim())
+        const extractedCompany = bestMatch[2].trim()
+        // If regex title is too long (>60 chars), it's likely too greedy — fall through to AI
+        if (extractedTitle.length <= 60 && extractedTitle.length > 0) {
+          intel = {
+            name,
+            title: extractedTitle,
+            company: extractedCompany,
+          }
+          console.log(`[LinkedIn Gemini Search] Regex extracted: "${intel.title}" @ "${intel.company}"`)
+        } else {
+          console.log(`[LinkedIn Gemini Search] Regex title too long or empty after cleanup (${extractedTitle.length} chars), falling through to AI extraction`)
         }
-        console.log(`[LinkedIn Gemini Search] Regex extracted: "${intel.title}" @ "${intel.company}"`)
       }
 
       // Second try: AI extraction if regex didn't work
@@ -169,7 +230,7 @@ What is ${name}'s CURRENT job title and CURRENT company? Return ONLY JSON, no ma
             if (parsed.currentCompany || parsed.currentTitle) {
               intel = {
                 name,
-                title: String(parsed.currentTitle || '').trim(),
+                title: cleanExtractedTitle(String(parsed.currentTitle || '').trim()),
                 company: String(parsed.currentCompany || '').trim(),
               }
             }
@@ -310,6 +371,8 @@ export async function findLinkedInForContact(contact: any): Promise<{
 
   // Gemini intel overrides if the probe data looks like location/generic text
   // (LinkedIn public pages often show "Location | Professional Profile" instead of company)
+  // Also overrides when probe found a DIFFERENT person (common name edge case):
+  //   probe company ≠ Gemini company AND probe company ≠ HubSpot company → wrong person
   if (geminiIntel) {
     const probeCompanyLooksWrong = !discoveredCompany ||
       discoveredCompany.toLowerCase().includes('professional profile') ||
@@ -317,13 +380,37 @@ export async function findLinkedInForContact(contact: any): Promise<{
       discoveredCompany.toLowerCase().includes('linkedin')
     const probeTitleEmpty = !discoveredTitle
 
-    if (probeCompanyLooksWrong && geminiIntel.company) {
+    // Common name edge case: probe found a real person, but it's the WRONG person
+    // Gemini (via Google Search) knows the real company, and probe found a different one
+    // that also doesn't match HubSpot → almost certainly a different person with the same name
+    const probeCompanyConflictsWithGemini = geminiIntel.company &&
+      discoveredCompany &&
+      !probeCompanyLooksWrong &&
+      discoveredCompany.toLowerCase() !== geminiIntel.company.toLowerCase() &&
+      discoveredCompany.toLowerCase() !== company.toLowerCase()
+
+    if ((probeCompanyLooksWrong || probeCompanyConflictsWithGemini) && geminiIntel.company) {
+      if (probeCompanyConflictsWithGemini) {
+        console.log(`[LinkedIn Discovery] Probe found "${discoveredCompany}" but Gemini says "${geminiIntel.company}" (HubSpot: "${company}") — likely wrong person, using Gemini intel`)
+      }
       discoveredCompany = geminiIntel.company
       console.log(`[LinkedIn Discovery] Using Gemini intel for company: "${geminiIntel.company}"`)
     }
-    if (probeTitleEmpty && geminiIntel.title) {
+    if ((probeTitleEmpty || probeCompanyConflictsWithGemini) && geminiIntel.title) {
       discoveredTitle = geminiIntel.title
       console.log(`[LinkedIn Discovery] Using Gemini intel for title: "${geminiIntel.title}"`)
+    }
+  }
+
+  // Probe validation: if the probe found a company that doesn't match HubSpot AND we have
+  // no Gemini intel to say otherwise, this is likely a different person with the same name.
+  // Reject the probe hit entirely — better to return not_found than wrong data.
+  if (discoveredCompany && company && !geminiIntel) {
+    const companyMatch = discoveredCompany.toLowerCase().includes(company.toLowerCase()) ||
+                         company.toLowerCase().includes(discoveredCompany.toLowerCase())
+    if (!companyMatch) {
+      console.log(`[LinkedIn Discovery] Probe found "${discoveredCompany}" but HubSpot says "${company}" — no Gemini intel to corroborate, rejecting as likely wrong person`)
+      return null
     }
   }
 
