@@ -28,8 +28,8 @@ lerna-debug.log*
 # misc
 .DS_Store
 
-.Handoff.md
-.implementation_plan.md
-.task_list.md
-.PRD.md
-.walkthrough.md
+Handoff
+implementation_plan.md
+task_list.md
+PRD.md
+walkthrough.md
